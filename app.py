@@ -53,18 +53,73 @@ def extract_event_from_jsonld(soup, base_url):
                     start = item.get('startDate') or ''
                     loc = item.get('location') or {}
                     venue = ''
+                    is_virtual = False
                     if isinstance(loc, dict):
                         venue = loc.get('name') or venue
+                        ltype = loc.get('@type') or ''
+                        if isinstance(ltype, list):
+                            is_virtual = 'VirtualLocation' in ltype
+                        else:
+                            is_virtual = str(ltype).lower() == 'virtuallocation'
+                        lname = (loc.get('name') or '').lower()
+                        if any(k in lname for k in ['online', 'virtual', 'zoom', 'remote']):
+                            is_virtual = True
                     return {
                         'title': name,
                         'description': (item.get('description') or '').strip(),
                         'url': url,
                         'date': start,
                         'venue': venue or 'San Francisco, CA',
+                        'is_virtual': is_virtual,
                     }
     except Exception:
         pass
     return None
+
+def parse_date_fallback(soup):
+    """Try multiple strategies to extract a start date/time from an event page."""
+    try:
+        # time tag with datetime
+        t = soup.find('time')
+        if t and t.get('datetime'):
+            return t['datetime']
+        # meta variants
+        for sel, attr in [
+            (dict(itemprop='startDate'), 'content'),
+            (dict(property='event:start_time'), 'content'),
+            (dict(name='event:start_time'), 'content'),
+            (dict(property='og:event:start_time'), 'content'),
+        ]:
+            m = soup.find('meta', **sel)
+            if m and m.get(attr):
+                return m[attr]
+        # ISO datetime anywhere in the HTML
+        m = re.search(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?", soup.get_text(" ", strip=True))
+        if m:
+            return m.group(0)
+    except Exception:
+        pass
+    return ''
+
+def within_next_two_weeks(date_str):
+    if not date_str:
+        return False
+    try:
+        # Try parse ISO first
+        dt = datetime.fromisoformat(date_str.replace('Z','+00:00')) if 'T' in date_str else datetime.fromisoformat(date_str)
+    except Exception:
+        try:
+            # Fallback to loose parse
+            from dateutil import parser as dateparser  # optional if installed
+            dt = dateparser.parse(date_str)
+        except Exception:
+            return False
+    now = datetime.now(dt.tzinfo) if dt.tzinfo else datetime.now()
+    return now <= dt <= (now + timedelta(days=14))
+
+def looks_like_sf(text):
+    t = (text or '').lower()
+    return any(k in t for k in ['san francisco', ' sf ', 'sf, ca', 'bay area'])
 
 def get_date_range():
     """Get current date and date 2 weeks from now"""
@@ -107,6 +162,7 @@ def fetch_meetup_events():
 
         soup = BeautifulSoup(resp.content, 'html.parser')
         events = []
+        detail_links = []
 
         for a in soup.find_all('a', href=True):
             href = a['href']
@@ -121,14 +177,36 @@ def fetch_meetup_events():
                     continue
                 if not any(k in text for k in allow_keywords):
                     continue
+                detail_links.append((title, full_url))
                 events.append({
                     'title': title,
                     'description': 'Tech event in San Francisco',
                     'url': full_url,
                     'date': '',
                     'venue': 'San Francisco, CA',
+                    'is_virtual': any(k in text for k in ['online','virtual','zoom','remote']),
                     'source': 'Meetup'
                 })
+
+        # Enrich first few meetup events with date by visiting detail pages
+        enriched = 0
+        for title, link in detail_links[:15]:
+            try:
+                dresp = requests.get(link, headers=DEFAULT_HEADERS, timeout=10)
+                if dresp.status_code != 200:
+                    continue
+                dsoup = BeautifulSoup(dresp.content, 'html.parser')
+                parsed = extract_event_from_jsonld(dsoup, link) or {}
+                datev = parsed.get('date') or parse_date_fallback(dsoup)
+                if datev:
+                    for e in events:
+                        if e['url'] == link:
+                            e['date'] = datev
+                            break
+                enriched += 1
+                time.sleep(0.2)
+            except Exception:
+                continue
 
         # De-dup within this source by URL
         seen = set()
@@ -208,15 +286,18 @@ def fetch_eventbrite_events():
                     text = (parsed['title'] + ' ' + parsed.get('description','')).lower()
                     if any(k in text for k in deny_keywords):
                         continue
+                    parsed['is_virtual'] = parsed.get('is_virtual', any(k in text for k in ['online','virtual','zoom','remote']))
                     events.append(parsed)
                 else:
                     title = (dsoup.find('h1') or dsoup.title or {}).get_text(strip=True) if dsoup.find('h1') or dsoup.title else 'Untitled Event'
+                    datev = parse_date_fallback(dsoup)
                     events.append({
                         'title': title,
                         'description': 'Tech event in San Francisco',
                         'url': link,
-                        'date': '',
+                        'date': datev or '',
                         'venue': 'San Francisco, CA',
+                        'is_virtual': any(k in title.lower() for k in ['online','virtual','zoom','remote']),
                         'source': 'Eventbrite'
                     })
                 time.sleep(0.3)
@@ -249,8 +330,8 @@ def fetch_luma_events():
         
         start_date, end_date = get_date_range()
         
-        # Luma San Francisco events page
-        url = "https://lu.ma/sf"
+        # Luma tech events page
+        url = "https://luma.com/tech"
         headers = DEFAULT_HEADERS
         
         response = requests.get(url, headers=headers, timeout=10)
@@ -272,23 +353,40 @@ def fetch_luma_events():
                 'backgammon','party','festival','music','concert','yoga','comedy','dance','theater','theatre'
             ]
             
-            # Collect candidate event links from the city page
+            # Collect candidate event links from the tech page
             links = []
             for a in soup.find_all('a', href=True):
                 href = a['href']
                 if '/event/' in href or '/e/' in href:
-                    links.append(urljoin('https://lu.ma', href))
+                    links.append(urljoin('https://luma.com', href))
+
+            # Try parsing Next.js data for client-rendered pages
+            if not links:
+                next_data = soup.find('script', id='__NEXT_DATA__')
+                if next_data and (next_data.string or next_data.get_text()):
+                    raw = next_data.string or next_data.get_text()
+                    # Extract event URLs from embedded JSON without depending on schema details
+                    for m in re.findall(r"https?://(?:lu\.ma|luma\.com)/(?:event|e)/[^\"'\s<>]+", raw):
+                        links.append(m)
+                    for m in re.findall(r"/+(?:event|e)/[^\"'\s<>]+", raw):
+                        links.append(urljoin('https://luma.com', m))
+
+            # Regex fallback over raw HTML
             if not links:
                 html = response.text
-                for m in re.findall(r"https?://lu\.ma/(?:event|e)/[^\"'\s<>]+", html):
+                for m in re.findall(r"https?://(?:lu\.ma|luma\.com)/(?:event|e)/[^\"'\s<>]+", html):
                     links.append(m)
+                for m in re.findall(r"/+(?:event|e)/[^\"'\s<>]+", html):
+                    links.append(urljoin('https://luma.com', m))
+
             links = list(dict.fromkeys(links))
             print(f"Luma: candidate links {len(links)}")
 
             # Visit detail pages and parse JSON-LD
             for link in links[:25]:
                 try:
-                    dresp = requests.get(link, headers=DEFAULT_HEADERS, timeout=10)
+                    hdrs = DEFAULT_HEADERS | {"Referer": url}
+                    dresp = requests.get(link, headers=hdrs, timeout=10)
                     if dresp.status_code != 200:
                         continue
                     dsoup = BeautifulSoup(dresp.content, 'html.parser')
@@ -298,17 +396,28 @@ def fetch_luma_events():
                         if any(k in text_for_filter for k in deny_keywords):
                             continue
                         parsed['source'] = 'Luma'
+                        parsed['is_virtual'] = parsed.get('is_virtual', any(k in text_for_filter for k in ['online','virtual','zoom','remote']))
+                        if not parsed.get('date'):
+                            parsed['date'] = parse_date_fallback(dsoup)
+                        # Luma: do not require explicit SF text; keep within next two weeks only if date known
+                        if parsed.get('date') and not within_next_two_weeks(parsed['date']):
+                            continue
                         events.append(parsed)
                     else:
                         title = (dsoup.find('h1') or dsoup.title or {}).get_text(strip=True) if dsoup.find('h1') or dsoup.title else 'Untitled Event'
                         if any(k in title.lower() for k in deny_keywords):
                             continue
+                        date_guess = parse_date_fallback(dsoup)
+                        # Luma: only enforce window if we have a date
+                        if date_guess and not within_next_two_weeks(date_guess):
+                            continue
                         events.append({
                             'title': title,
                             'description': 'Tech event in San Francisco',
                             'url': link,
-                            'date': '',
+                            'date': date_guess,
                             'venue': 'San Francisco, CA',
+                            'is_virtual': any(k in title.lower() for k in ['online','virtual','zoom','remote']),
                             'source': 'Luma'
                         })
                     time.sleep(0.3)
@@ -316,10 +425,60 @@ def fetch_luma_events():
                     continue
             
             print(f"Luma: Found {len(events)} events via web scraping")
-            return events
+            luma_events = events
         else:
             print(f"Luma scraping error: {response.status_code}")
-            return []
+            luma_events = []
+        
+        # If no events yet, try sitemap fallback
+        if not luma_events:
+            try:
+                sm_urls = [
+                    "https://luma.com/sitemap.xml",
+                    "https://www.luma.com/sitemap.xml",
+                    "https://lu.ma/sitemap.xml",
+                    "https://lu.ma/sitemap-index.xml"
+                ]
+                links = []
+                for sm in sm_urls:
+                    sresp = requests.get(sm, headers=DEFAULT_HEADERS, timeout=10)
+                    if sresp.status_code != 200:
+                        continue
+                    for m in re.findall(r"https?://[^<]+/(?:event|e)/[^<\s]+", sresp.text):
+                        links.append(m)
+                links = list(dict.fromkeys(links))[:30]
+                print(f"Luma sitemap: candidate links {len(links)}")
+                events = []
+                for link in links:
+                    try:
+                        dresp = requests.get(link, headers=DEFAULT_HEADERS, timeout=10)
+                        if dresp.status_code != 200:
+                            continue
+                        dsoup = BeautifulSoup(dresp.content, 'html.parser')
+                        parsed = extract_event_from_jsonld(dsoup, link) or {}
+                        title = parsed.get('title') or (dsoup.find('h1') or dsoup.title or {}).get_text(strip=True) if dsoup.find('h1') or dsoup.title else 'Untitled Event'
+                        desc = parsed.get('description', '')
+                        datev = parsed.get('date') or parse_date_fallback(dsoup)
+                        # Luma sitemap: do not require SF; only enforce window if date known
+                        if datev and not within_next_two_weeks(datev):
+                            continue
+                        events.append({
+                            'title': title,
+                            'description': desc or 'Tech event in San Francisco',
+                            'url': link,
+                            'date': datev or '',
+                            'venue': parsed.get('venue', 'San Francisco, CA'),
+                            'is_virtual': parsed.get('is_virtual', any(k in (title+desc).lower() for k in ['online','virtual','zoom','remote'])),
+                            'source': 'Luma'
+                        })
+                        time.sleep(0.2)
+                    except Exception:
+                        continue
+                print(f"Luma sitemap: Found {len(events)} events via web scraping")
+                luma_events = events
+            except Exception:
+                luma_events = []
+        return luma_events
     except Exception as e:
         print(f"Error fetching Luma events: {e}")
         return []
@@ -352,32 +511,51 @@ def fetch_cerebralvalley_events():
                 href = a['href']
                 if '/events/' in href:
                     links.append(urljoin('https://cerebralvalley.ai', href))
+
             if not links:
                 html = response.text
-                for m in re.findall(r"https?://cerebralvalley\.ai/events/[^\"'\s<>]+", html):
+                # absolute links
+                for m in re.findall(r"https?://(?:www\.)?cerebralvalley\.ai/events/[^\"'\s<>]+", html):
                     links.append(m)
+                # relative links
+                for m in re.findall(r"/events/[^\"'\s<>]+", html):
+                    links.append(urljoin('https://cerebralvalley.ai', m))
+
             links = list(dict.fromkeys(links))
             print(f"Cerebral Valley: candidate links {len(links)}")
 
             # Visit detail pages and parse JSON-LD
             for link in links[:25]:
                 try:
-                    dresp = requests.get(link, headers=DEFAULT_HEADERS, timeout=10)
+                    hdrs = DEFAULT_HEADERS | {"Referer": url}
+                    dresp = requests.get(link, headers=hdrs, timeout=10)
                     if dresp.status_code != 200:
                         continue
                     dsoup = BeautifulSoup(dresp.content, 'html.parser')
                     parsed = extract_event_from_jsonld(dsoup, link)
                     if parsed:
                         parsed['source'] = 'CerebralValley'
+                        text = (parsed['title'] + ' ' + parsed.get('description','')).lower()
+                        parsed['is_virtual'] = parsed.get('is_virtual', any(k in text for k in ['online','virtual','zoom','remote']))
+                        # Prefer parsed date; fallback to DOM
+                        if not parsed.get('date'):
+                            parsed['date'] = parse_date_fallback(dsoup)
+                        # CV: do not require SF text; only enforce window if date known
+                        if parsed.get('date') and not within_next_two_weeks(parsed['date']):
+                            continue
                         events.append(parsed)
                     else:
                         title = (dsoup.find('h1') or dsoup.title or {}).get_text(strip=True) if dsoup.find('h1') or dsoup.title else 'Untitled Event'
+                        date_guess = parse_date_fallback(dsoup)
+                        if date_guess and not within_next_two_weeks(date_guess):
+                            continue
                         events.append({
                             'title': title,
                             'description': 'AI/Tech event in San Francisco',
                             'url': link,
-                            'date': '',
+                            'date': date_guess,
                             'venue': 'San Francisco, CA',
+                            'is_virtual': any(k in title.lower() for k in ['online','virtual','zoom','remote']),
                             'source': 'CerebralValley'
                         })
                     time.sleep(0.3)

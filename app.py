@@ -6,6 +6,10 @@ from sentence_transformers import SentenceTransformer, util
 import os
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup
+import json
+import time
+from urllib.parse import urljoin
+import re
 
 load_dotenv()
 
@@ -18,6 +22,49 @@ model = SentenceTransformer('all-MiniLM-L6-v2')
 # API Keys from environment variables
 MEETUP_API_KEY = os.getenv('MEETUP_API_KEY', '')
 EVENTBRITE_TOKEN = os.getenv('EVENTBRITE_TOKEN', '')
+
+# Common headers for scraping
+DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
+def extract_event_from_jsonld(soup, base_url):
+    """Extract a single event from JSON-LD if present."""
+    try:
+        scripts = soup.find_all('script', type='application/ld+json')
+        for script in scripts:
+            raw = script.string or script.get_text() or ""
+            if not raw.strip():
+                continue
+            try:
+                data = json.loads(raw)
+            except Exception:
+                continue
+            items = data if isinstance(data, list) else [data]
+            for item in items:
+                types = item.get('@type')
+                if isinstance(types, str):
+                    types = [types]
+                if types and 'Event' in types:
+                    name = item.get('name') or 'Untitled Event'
+                    url = item.get('url') or base_url
+                    start = item.get('startDate') or ''
+                    loc = item.get('location') or {}
+                    venue = ''
+                    if isinstance(loc, dict):
+                        venue = loc.get('name') or venue
+                    return {
+                        'title': name,
+                        'description': (item.get('description') or '').strip(),
+                        'url': url,
+                        'date': start,
+                        'venue': venue or 'San Francisco, CA',
+                    }
+    except Exception:
+        pass
+    return None
 
 def get_date_range():
     """Get current date and date 2 weeks from now"""
@@ -39,9 +86,7 @@ def fetch_meetup_events():
             "https://www.meetup.com/find/?source=EVENTS&distance=ten&location=us--ca--San%20Francisco"
             "&keywords=ai%2C%20machine%20learning%2C%20software%2C%20developer%2C%20startup%2C%20engineering"
         )
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
-        }
+        headers = DEFAULT_HEADERS
 
         allow_keywords = [
             'ai','artificial intelligence','machine learning','ml','data','database','big data','llm',
@@ -133,25 +178,50 @@ def fetch_eventbrite_events():
         soup = BeautifulSoup(resp.content, 'html.parser')
         events = []
 
-        # Heuristic: anchors to events look like '/e/<slug>-<id>'
+        # Collect candidate event links and fetch detail pages to parse JSON-LD
+        links = []
         for a in soup.find_all('a', href=True):
             href = a['href']
-            if '/e/' in href and 'eventbrite' in href:
-                title = a.get('aria-label') or a.get_text(strip=True) or 'Untitled Event'
-                text = f"{title} {href}".lower()
-                if any(k in text for k in deny_keywords):
+            if '/e/' in href:
+                links.append(urljoin('https://www.eventbrite.com', href))
+        if not links:
+            # Fallback: regex URLs from raw HTML (handles client-rendered listings)
+            html = resp.text
+            for m in re.findall(r"https?://www\.eventbrite\.com/e/[^\"'\s<>]+", html):
+                links.append(m)
+        links = list(dict.fromkeys(links))
+        print(f"Eventbrite: candidate links {len(links)}")
+        seen_links = []
+        for link in links:
+            if link in seen_links:
+                continue
+            seen_links.append(link)
+            try:
+                dresp = requests.get(link, headers=DEFAULT_HEADERS, timeout=10)
+                if dresp.status_code != 200:
                     continue
-                if not any(k in text for k in allow_keywords):
-                    continue
-                full_url = href if href.startswith('http') else f"https://www.eventbrite.com{href}"
-                events.append({
-                    'title': title,
-                    'description': 'Tech event in San Francisco',
-                    'url': full_url,
-                    'date': '',
-                    'venue': 'San Francisco, CA',
-                    'source': 'Eventbrite'
-                })
+                dsoup = BeautifulSoup(dresp.content, 'html.parser')
+                parsed = extract_event_from_jsonld(dsoup, link)
+                if parsed:
+                    parsed['source'] = 'Eventbrite'
+                    # Light deny-only filter to avoid obvious noise
+                    text = (parsed['title'] + ' ' + parsed.get('description','')).lower()
+                    if any(k in text for k in deny_keywords):
+                        continue
+                    events.append(parsed)
+                else:
+                    title = (dsoup.find('h1') or dsoup.title or {}).get_text(strip=True) if dsoup.find('h1') or dsoup.title else 'Untitled Event'
+                    events.append({
+                        'title': title,
+                        'description': 'Tech event in San Francisco',
+                        'url': link,
+                        'date': '',
+                        'venue': 'San Francisco, CA',
+                        'source': 'Eventbrite'
+                    })
+                time.sleep(0.3)
+            except Exception:
+                continue
 
         # De-dup within this source by URL
         seen = set()
@@ -181,9 +251,7 @@ def fetch_luma_events():
         
         # Luma San Francisco events page
         url = "https://lu.ma/sf"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        }
+        headers = DEFAULT_HEADERS
         
         response = requests.get(url, headers=headers, timeout=10)
         
@@ -204,32 +272,47 @@ def fetch_luma_events():
                 'backgammon','party','festival','music','concert','yoga','comedy','dance','theater','theatre'
             ]
             
-            # Try to find event elements (structure may vary)
-            # This is a basic implementation that may need adjustment based on actual HTML structure
-            event_cards = soup.find_all(['div', 'article'], class_=lambda x: x and ('event' in x.lower() or 'card' in x.lower()))
-            
-            for card in event_cards[:20]:  # Limit to 20 events
+            # Collect candidate event links from the city page
+            links = []
+            for a in soup.find_all('a', href=True):
+                href = a['href']
+                if '/event/' in href or '/e/' in href:
+                    links.append(urljoin('https://lu.ma', href))
+            if not links:
+                html = response.text
+                for m in re.findall(r"https?://lu\.ma/(?:event|e)/[^\"'\s<>]+", html):
+                    links.append(m)
+            links = list(dict.fromkeys(links))
+            print(f"Luma: candidate links {len(links)}")
+
+            # Visit detail pages and parse JSON-LD
+            for link in links[:25]:
                 try:
-                    title = card.find(['h1', 'h2', 'h3', 'h4']).get_text(strip=True) if card.find(['h1', 'h2', 'h3', 'h4']) else 'Untitled Event'
-                    link = card.find('a')['href'] if card.find('a') and card.find('a').get('href') else ''
-                    if link and not link.startswith('http'):
-                        link = f"https://lu.ma{link}"
-
-                    text_for_filter = f"{title} {link}".lower()
-                    if any(k in text_for_filter for k in deny_keywords):
+                    dresp = requests.get(link, headers=DEFAULT_HEADERS, timeout=10)
+                    if dresp.status_code != 200:
                         continue
-                    if not any(k in text_for_filter for k in allow_keywords):
-                        continue
-
-                    events.append({
-                        'title': title,
-                        'description': 'Tech event in San Francisco',
-                        'url': link,
-                        'date': '',
-                        'venue': 'San Francisco, CA',
-                        'source': 'Luma'
-                    })
-                except Exception as e:
+                    dsoup = BeautifulSoup(dresp.content, 'html.parser')
+                    parsed = extract_event_from_jsonld(dsoup, link)
+                    if parsed:
+                        text_for_filter = (parsed['title'] + ' ' + parsed.get('description','')).lower()
+                        if any(k in text_for_filter for k in deny_keywords):
+                            continue
+                        parsed['source'] = 'Luma'
+                        events.append(parsed)
+                    else:
+                        title = (dsoup.find('h1') or dsoup.title or {}).get_text(strip=True) if dsoup.find('h1') or dsoup.title else 'Untitled Event'
+                        if any(k in title.lower() for k in deny_keywords):
+                            continue
+                        events.append({
+                            'title': title,
+                            'description': 'Tech event in San Francisco',
+                            'url': link,
+                            'date': '',
+                            'venue': 'San Francisco, CA',
+                            'source': 'Luma'
+                        })
+                    time.sleep(0.3)
+                except Exception:
                     continue
             
             print(f"Luma: Found {len(events)} events via web scraping")
@@ -255,9 +338,7 @@ def fetch_cerebralvalley_events():
         
         # Cerebral Valley events page
         url = "https://cerebralvalley.ai/events"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        }
+        headers = DEFAULT_HEADERS
         
         response = requests.get(url, headers=headers, timeout=10)
         
@@ -265,34 +346,44 @@ def fetch_cerebralvalley_events():
             soup = BeautifulSoup(response.content, 'html.parser')
             events = []
             
-            # Try to find event elements (structure may vary)
-            # This is a basic implementation that may need adjustment based on actual HTML structure
-            event_elements = soup.find_all(['div', 'article', 'li'], class_=lambda x: x and ('event' in x.lower() or 'card' in x.lower()))
-            
-            for element in event_elements[:20]:  # Limit to 20 events
+            # Collect candidate links from the events page
+            links = []
+            for a in soup.find_all('a', href=True):
+                href = a['href']
+                if '/events/' in href:
+                    links.append(urljoin('https://cerebralvalley.ai', href))
+            if not links:
+                html = response.text
+                for m in re.findall(r"https?://cerebralvalley\.ai/events/[^\"'\s<>]+", html):
+                    links.append(m)
+            links = list(dict.fromkeys(links))
+            print(f"Cerebral Valley: candidate links {len(links)}")
+
+            # Visit detail pages and parse JSON-LD
+            for link in links[:25]:
                 try:
-                    title = element.find(['h1', 'h2', 'h3', 'h4']).get_text(strip=True) if element.find(['h1', 'h2', 'h3', 'h4']) else None
-                    if not title:
+                    dresp = requests.get(link, headers=DEFAULT_HEADERS, timeout=10)
+                    if dresp.status_code != 200:
                         continue
-                    
-                    link = element.find('a')['href'] if element.find('a') and element.find('a').get('href') else ''
-                    if link and not link.startswith('http'):
-                        link = f"https://cerebralvalley.ai{link}"
-                    
-                    description_elem = element.find('p')
-                    description = description_elem.get_text(strip=True) if description_elem else ''
-                    
-                    events.append({
-                        'title': title,
-                        'description': description or 'AI/Tech event in San Francisco',
-                        'url': link,
-                        'date': '',
-                        'venue': 'San Francisco, CA',
-                        'source': 'CerebralValley'
-                    })
-                except Exception as e:
+                    dsoup = BeautifulSoup(dresp.content, 'html.parser')
+                    parsed = extract_event_from_jsonld(dsoup, link)
+                    if parsed:
+                        parsed['source'] = 'CerebralValley'
+                        events.append(parsed)
+                    else:
+                        title = (dsoup.find('h1') or dsoup.title or {}).get_text(strip=True) if dsoup.find('h1') or dsoup.title else 'Untitled Event'
+                        events.append({
+                            'title': title,
+                            'description': 'AI/Tech event in San Francisco',
+                            'url': link,
+                            'date': '',
+                            'venue': 'San Francisco, CA',
+                            'source': 'CerebralValley'
+                        })
+                    time.sleep(0.3)
+                except Exception:
                     continue
-            
+
             print(f"Cerebral Valley: Found {len(events)} events via web scraping")
             return events
         else:

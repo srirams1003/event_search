@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from sentence_transformers import SentenceTransformer, util
 import os
 from dotenv import load_dotenv
+from bs4 import BeautifulSoup
 
 load_dotenv()
 
@@ -17,8 +18,6 @@ model = SentenceTransformer('all-MiniLM-L6-v2')
 # API Keys from environment variables
 MEETUP_API_KEY = os.getenv('MEETUP_API_KEY', '')
 EVENTBRITE_TOKEN = os.getenv('EVENTBRITE_TOKEN', '')
-TICKETMASTER_API_KEY = os.getenv('TICKETMASTER_API_KEY', '')
-
 
 def get_date_range():
     """Get current date and date 2 weeks from now"""
@@ -29,84 +28,74 @@ def get_date_range():
 
 def fetch_meetup_events():
     """
-    Fetch events from Meetup API
-    API: https://api.meetup.com/gql (GraphQL) or find/upcoming_events
-    Note: Meetup has deprecated their REST API in favor of GraphQL
+    Fetch events from Meetup via web scraping (no API).
+    Uses a search page scoped to SF and tech keywords.
     """
-    if not MEETUP_API_KEY:
-        print("Meetup API key not configured")
-        return []
-    
     try:
         start_date, end_date = get_date_range()
-        
-        # Using GraphQL endpoint
-        url = "https://api.meetup.com/gql"
+
+        # Meetup search for SF with tech-related keywords
+        url = (
+            "https://www.meetup.com/find/?source=EVENTS&distance=ten&location=us--ca--San%20Francisco"
+            "&keywords=ai%2C%20machine%20learning%2C%20software%2C%20developer%2C%20startup%2C%20engineering"
+        )
         headers = {
-            "Authorization": f"Bearer {MEETUP_API_KEY}",
-            "Content-Type": "application/json"
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
         }
-        
-        query = """
-        query($lat: Float!, $lon: Float!, $startDate: DateTime!, $endDate: DateTime!) {
-            rankedEvents(input: {
-                lat: $lat
-                lon: $lon
-                radius: 25
-                startDateRange: $startDate
-                endDateRange: $endDate
-            }) {
-                edges {
-                    node {
-                        id
-                        title
-                        description
-                        eventUrl
-                        dateTime
-                        endTime
-                        venue {
-                            name
-                            address
-                            city
-                        }
-                        group {
-                            name
-                        }
-                    }
-                }
-            }
-        }
-        """
-        
-        variables = {
-            "lat": 37.7749,  # San Francisco latitude
-            "lon": -122.4194,  # San Francisco longitude
-            "startDate": start_date.isoformat(),
-            "endDate": end_date.isoformat()
-        }
-        
-        response = requests.post(url, json={"query": query, "variables": variables}, headers=headers)
-        
-        if response.status_code == 200:
-            data = response.json()
-            events = []
-            
-            if 'data' in data and 'rankedEvents' in data['data']:
-                for edge in data['data']['rankedEvents'].get('edges', []):
-                    node = edge.get('node', {})
-                    events.append({
-                        'title': node.get('title', 'Untitled Event'),
-                        'description': node.get('description', ''),
-                        'url': node.get('eventUrl', ''),
-                        'date': node.get('dateTime', ''),
-                        'venue': node.get('venue', {}).get('name', 'TBA'),
-                        'source': 'Meetup'
-                    })
-            
-            return events
-        else:
-            print(f"Meetup API error: {response.status_code}")
+
+        allow_keywords = [
+            'ai','artificial intelligence','machine learning','ml','data','database','big data','llm',
+            'developer','dev','engineering','engineer','software','coding','programming','hack','hackathon',
+            'startup','founder','product','web3','blockchain','crypto','cloud','kubernetes','docker','devops',
+            'python','javascript','typescript','react','node','go','rust','java','swift','ios','android',
+            'meetup','tech','technology'
+        ]
+        deny_keywords = [
+            'pickleball','padel','tennis','basketball','baseball','football','soccer','bike','cycling',
+            'backgammon','party','festival','music','concert','yoga','comedy','dance','theater','theatre'
+        ]
+
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code != 200:
+            print(f"Meetup scraping error: {resp.status_code}")
             return []
+
+        soup = BeautifulSoup(resp.content, 'html.parser')
+        events = []
+
+        for a in soup.find_all('a', href=True):
+            href = a['href']
+            # Normalize relative Meetup links
+            full_url = href
+            if href.startswith('/'):
+                full_url = f"https://www.meetup.com{href}"
+            if '/events/' in full_url and 'meetup.com' in full_url:
+                title = a.get_text(strip=True) or 'Untitled Event'
+                text = f"{title} {full_url}".lower()
+                if any(k in text for k in deny_keywords):
+                    continue
+                if not any(k in text for k in allow_keywords):
+                    continue
+                events.append({
+                    'title': title,
+                    'description': 'Tech event in San Francisco',
+                    'url': full_url,
+                    'date': '',
+                    'venue': 'San Francisco, CA',
+                    'source': 'Meetup'
+                })
+
+        # De-dup within this source by URL
+        seen = set()
+        unique = []
+        for e in events:
+            if e['url'] in seen:
+                continue
+            seen.add(e['url'])
+            unique.append(e)
+
+        print(f"Meetup: Found {len(unique)} events via web scraping")
+        return unique[:30]
     except Exception as e:
         print(f"Error fetching Meetup events: {e}")
         return []
@@ -114,49 +103,67 @@ def fetch_meetup_events():
 
 def fetch_eventbrite_events():
     """
-    Fetch events from Eventbrite API
-    API: https://www.eventbriteapi.com/v3/events/search/
+    Fetch events from Eventbrite via web scraping (no API).
+    Uses SF + Science & Tech category listing.
     """
-    if not EVENTBRITE_TOKEN:
-        print("Eventbrite token not configured")
-        return []
-    
     try:
-        start_date, end_date = get_date_range()
-        
-        url = "https://www.eventbriteapi.com/v3/events/search/"
+        # Eventbrite SF Science & Tech search
+        url = "https://www.eventbrite.com/d/ca--san-francisco/science-and-tech--events/"
         headers = {
-            "Authorization": f"Bearer {EVENTBRITE_TOKEN}"
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
         }
-        params = {
-            "location.address": "San Francisco, CA",
-            "location.within": "10mi",
-            "start_date.range_start": start_date.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "start_date.range_end": end_date.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "categories": "102",  # Science & Technology category
-            "expand": "venue"
-        }
-        
-        response = requests.get(url, headers=headers, params=params)
-        
-        if response.status_code == 200:
-            data = response.json()
-            events = []
-            
-            for event in data.get('events', []):
+
+        allow_keywords = [
+            'ai','artificial intelligence','machine learning','ml','data','database','big data','llm',
+            'developer','dev','engineering','engineer','software','coding','programming','hack','hackathon',
+            'startup','founder','product','web3','blockchain','crypto','cloud','kubernetes','docker','devops',
+            'python','javascript','typescript','react','node','go','rust','java','swift','ios','android',
+            'meetup','tech','technology'
+        ]
+        deny_keywords = [
+            'pickleball','padel','tennis','basketball','baseball','football','soccer','bike','cycling',
+            'backgammon','party','festival','music','concert','yoga','comedy','dance','theater','theatre'
+        ]
+
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code != 200:
+            print(f"Eventbrite scraping error: {resp.status_code}")
+            return []
+
+        soup = BeautifulSoup(resp.content, 'html.parser')
+        events = []
+
+        # Heuristic: anchors to events look like '/e/<slug>-<id>'
+        for a in soup.find_all('a', href=True):
+            href = a['href']
+            if '/e/' in href and 'eventbrite' in href:
+                title = a.get('aria-label') or a.get_text(strip=True) or 'Untitled Event'
+                text = f"{title} {href}".lower()
+                if any(k in text for k in deny_keywords):
+                    continue
+                if not any(k in text for k in allow_keywords):
+                    continue
+                full_url = href if href.startswith('http') else f"https://www.eventbrite.com{href}"
                 events.append({
-                    'title': event.get('name', {}).get('text', 'Untitled Event'),
-                    'description': event.get('description', {}).get('text', ''),
-                    'url': event.get('url', ''),
-                    'date': event.get('start', {}).get('local', ''),
-                    'venue': event.get('venue', {}).get('name', 'TBA') if event.get('venue') else 'TBA',
+                    'title': title,
+                    'description': 'Tech event in San Francisco',
+                    'url': full_url,
+                    'date': '',
+                    'venue': 'San Francisco, CA',
                     'source': 'Eventbrite'
                 })
-            
-            return events
-        else:
-            print(f"Eventbrite API error: {response.status_code}")
-            return []
+
+        # De-dup within this source by URL
+        seen = set()
+        unique = []
+        for e in events:
+            if e['url'] in seen:
+                continue
+            seen.add(e['url'])
+            unique.append(e)
+
+        print(f"Eventbrite: Found {len(unique)} events via web scraping")
+        return unique[:30]
     except Exception as e:
         print(f"Error fetching Eventbrite events: {e}")
         return []
@@ -169,7 +176,6 @@ def fetch_luma_events():
     Note: No public API available, using web scraping
     """
     try:
-        from bs4 import BeautifulSoup
         
         start_date, end_date = get_date_range()
         
@@ -184,6 +190,19 @@ def fetch_luma_events():
         if response.status_code == 200:
             soup = BeautifulSoup(response.content, 'html.parser')
             events = []
+
+            # Simple tech-only filtering using allowlist/denylist keywords
+            allow_keywords = [
+                'ai','artificial intelligence','machine learning','ml','data','database','big data','llm',
+                'developer','dev','engineering','engineer','software','coding','programming','hack','hackathon',
+                'startup','founder','product','web3','blockchain','crypto','cloud','kubernetes','docker','devops',
+                'python','javascript','typescript','react','node','go','rust','java','swift','ios','android',
+                'meetup','tech','technology'
+            ]
+            deny_keywords = [
+                'pickleball','padel','tennis','basketball','baseball','football','soccer','bike','cycling',
+                'backgammon','party','festival','music','concert','yoga','comedy','dance','theater','theatre'
+            ]
             
             # Try to find event elements (structure may vary)
             # This is a basic implementation that may need adjustment based on actual HTML structure
@@ -195,7 +214,13 @@ def fetch_luma_events():
                     link = card.find('a')['href'] if card.find('a') and card.find('a').get('href') else ''
                     if link and not link.startswith('http'):
                         link = f"https://lu.ma{link}"
-                    
+
+                    text_for_filter = f"{title} {link}".lower()
+                    if any(k in text_for_filter for k in deny_keywords):
+                        continue
+                    if not any(k in text_for_filter for k in allow_keywords):
+                        continue
+
                     events.append({
                         'title': title,
                         'description': 'Tech event in San Francisco',
@@ -277,56 +302,6 @@ def fetch_cerebralvalley_events():
         print(f"Error fetching Cerebral Valley events: {e}")
         return []
 
-
-def fetch_ticketmaster_events():
-    """
-    Fetch events from Ticketmaster API
-    API: https://app.ticketmaster.com/discovery/v2/events.json
-    """
-    if not TICKETMASTER_API_KEY:
-        print("Ticketmaster API key not configured")
-        return []
-    
-    try:
-        start_date, end_date = get_date_range()
-        
-        url = "https://app.ticketmaster.com/discovery/v2/events.json"
-        params = {
-            "apikey": TICKETMASTER_API_KEY,
-            "city": "San Francisco",
-            "stateCode": "CA",
-            "classificationName": "Technology",
-            "startDateTime": start_date.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "endDateTime": end_date.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "size": 100
-        }
-        
-        response = requests.get(url, params=params)
-        
-        if response.status_code == 200:
-            data = response.json()
-            events = []
-            
-            embedded = data.get('_embedded', {})
-            for event in embedded.get('events', []):
-                venue_info = event.get('_embedded', {}).get('venues', [{}])[0]
-                
-                events.append({
-                    'title': event.get('name', 'Untitled Event'),
-                    'description': event.get('info', event.get('pleaseNote', '')),
-                    'url': event.get('url', ''),
-                    'date': event.get('dates', {}).get('start', {}).get('localDate', ''),
-                    'venue': venue_info.get('name', 'TBA'),
-                    'source': 'Ticketmaster'
-                })
-            
-            return events
-        else:
-            print(f"Ticketmaster API error: {response.status_code}")
-            return []
-    except Exception as e:
-        print(f"Error fetching Ticketmaster events: {e}")
-        return []
 
 
 def is_duplicate(event1, event2, threshold=0.75):
@@ -418,9 +393,7 @@ def get_events():
         
         print("Fetching from Cerebral Valley...")
         all_events.extend(fetch_cerebralvalley_events())
-        
-        print("Fetching from Ticketmaster...")
-        all_events.extend(fetch_ticketmaster_events())
+
         
         print(f"Total events fetched: {len(all_events)}")
         

@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SF Tech Events - Next Two Weeks</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            color: white;
+            margin-bottom: 40px;
+            padding: 40px 0;
+        }
+
+        h1 {
+            font-size: 3em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        }
+
+        .subtitle {
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+
+        .stats {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            display: flex;
+            justify-content: space-around;
+            flex-wrap: wrap;
+        }
+
+        .stat-item {
+            text-align: center;
+            padding: 10px 20px;
+        }
+
+        .stat-number {
+            font-size: 2.5em;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .stat-label {
+            color: #666;
+            font-size: 0.9em;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .loading {
+            text-align: center;
+            color: white;
+            font-size: 1.5em;
+            padding: 50px;
+        }
+
+        .spinner {
+            border: 4px solid rgba(255,255,255,0.3);
+            border-top: 4px solid white;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error {
+            background: #ff4444;
+            color: white;
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .filters {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .filter-group {
+            margin-bottom: 15px;
+        }
+
+        .filter-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .filter-group input,
+        .filter-group select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 1em;
+        }
+
+        .events-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            gap: 25px;
+            margin-bottom: 40px;
+        }
+
+        .event-card {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            transition: transform 0.2s, box-shadow 0.2s;
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .event-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 12px rgba(0,0,0,0.2);
+        }
+
+        .event-source {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            background: #667eea;
+            color: white;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.75em;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .event-title {
+            font-size: 1.4em;
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: #333;
+            padding-right: 80px;
+            line-height: 1.3;
+        }
+
+        .event-virtual {
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            background: #0ea5e9;
+            color: white;
+            padding: 5px 10px;
+            border-radius: 16px;
+            font-size: 0.75em;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .event-date {
+            color: #667eea;
+            font-weight: 600;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+        }
+
+        .event-date::before {
+            content: "📅";
+            margin-right: 8px;
+        }
+
+        .event-venue {
+            color: #666;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+        }
+
+        .event-venue::before {
+            content: "📍";
+            margin-right: 8px;
+        }
+
+        .event-description {
+            color: #555;
+            line-height: 1.6;
+            margin-bottom: 15px;
+            max-height: 100px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .event-link {
+            display: inline-block;
+            background: #667eea;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 6px;
+            text-decoration: none;
+            font-weight: 600;
+            transition: background 0.2s;
+        }
+
+        .event-link:hover {
+            background: #5568d3;
+        }
+
+        .no-events {
+            text-align: center;
+            color: white;
+            font-size: 1.3em;
+            padding: 50px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 12px;
+        }
+
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 2em;
+            }
+
+            .events-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .stats {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🚀 SF Tech Events</h1>
+            <p class="subtitle">Discover tech events in San Francisco for the next two weeks</p>
+        </header>
+
+        <div id="stats" class="stats" style="display: none;">
+            <div class="stat-item">
+                <div class="stat-number" id="total-events">0</div>
+                <div class="stat-label">Total Events</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-number" id="sources-count">4</div>
+                <div class="stat-label">Sources</div>
+            </div>
+        </div>
+
+        <div id="loading" class="loading">
+            <div class="spinner"></div>
+            <p>Fetching events from multiple sources...</p>
+            <p style="font-size: 0.8em; margin-top: 10px;">This may take a few moments</p>
+        </div>
+
+        <div id="error" style="display: none;"></div>
+
+        <div id="filters" class="filters" style="display: none;">
+            <div class="filter-group">
+                <label for="search">🔍 Search Events</label>
+                <input type="text" id="search" placeholder="Search by title, description, or venue...">
+            </div>
+            <div class="filter-group">
+                <label for="source-filter">Filter by Source</label>
+                <select id="source-filter">
+                    <option value="all">All Sources</option>
+                    <option value="Meetup">Meetup</option>
+                    <option value="Eventbrite">Eventbrite</option>
+                    <option value="Luma">Luma</option>
+                    <option value="CerebralValley">Cerebral Valley</option>
+                </select>
+            </div>
+        </div>
+
+        <div id="events-container" class="events-grid"></div>
+    </div>
+
+    <script>
+        let allEvents = [];
+
+        async function fetchEvents() {
+            try {
+                const response = await fetch('/api/events');
+                const data = await response.json();
+
+                if (data.success) {
+                    allEvents = data.events;
+                    displayEvents(allEvents);
+                    updateStats(data.total_events);
+                    
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('stats').style.display = 'flex';
+                    document.getElementById('filters').style.display = 'block';
+                } else {
+                    throw new Error(data.error || 'Failed to fetch events');
+                }
+            } catch (error) {
+                console.error('Error fetching events:', error);
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('error').style.display = 'block';
+                document.getElementById('error').className = 'error';
+                document.getElementById('error').innerHTML = `
+                    <strong>Error:</strong> ${error.message}
+                    <br><br>
+                    <em>Please make sure API keys are configured in the .env file</em>
+                `;
+            }
+        }
+
+        function formatDate(dateString) {
+            if (!dateString) return 'Date TBA';
+            
+            try {
+                const date = new Date(dateString);
+                const options = { 
+                    weekday: 'short', 
+                    year: 'numeric', 
+                    month: 'short', 
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                };
+                return date.toLocaleDateString('en-US', options);
+            } catch {
+                return dateString;
+            }
+        }
+
+        function stripHtml(html) {
+            const tmp = document.createElement('div');
+            tmp.innerHTML = html;
+            return tmp.textContent || tmp.innerText || '';
+        }
+
+        function truncateText(text, maxLength = 200) {
+            const cleaned = stripHtml(text);
+            if (cleaned.length <= maxLength) return cleaned;
+            return cleaned.substr(0, maxLength) + '...';
+        }
+
+        function displayEvents(events) {
+            const container = document.getElementById('events-container');
+
+            if (events.length === 0) {
+                container.innerHTML = '<div class="no-events">No events found. Try adjusting your filters or check your API keys.</div>';
+                return;
+            }
+
+            container.innerHTML = events.map(event => `
+                <div class="event-card">
+                    ${event.is_virtual ? `<span class="event-virtual">Virtual</span>` : ''}
+                    <span class="event-source">${event.source}</span>
+                    <h3 class="event-title">${event.title}</h3>
+                    <div class="event-date">${formatDate(event.date)}</div>
+                    <div class="event-venue">${event.is_virtual ? 'Online' : (event.venue || '')}</div>
+                    ${event.description ? `<p class="event-description">${truncateText(event.description)}</p>` : ''}
+                    ${event.url ? `<a href="${event.url}" target="_blank" class="event-link">View Details →</a>` : ''}
+                </div>
+            `).join('');
+        }
+
+        function updateStats(totalEvents) {
+            document.getElementById('total-events').textContent = totalEvents;
+        }
+
+        function filterEvents() {
+            const searchTerm = document.getElementById('search').value.toLowerCase();
+            const sourceFilter = document.getElementById('source-filter').value;
+
+            const filtered = allEvents.filter(event => {
+                const matchesSearch = 
+                    event.title.toLowerCase().includes(searchTerm) ||
+                    (event.description && event.description.toLowerCase().includes(searchTerm)) ||
+                    (event.venue && event.venue.toLowerCase().includes(searchTerm));
+
+                const matchesSource = sourceFilter === 'all' || event.source === sourceFilter;
+
+                return matchesSearch && matchesSource;
+            });
+
+            displayEvents(filtered);
+            document.getElementById('total-events').textContent = filtered.length;
+        }
+
+        // Event listeners for filters
+        document.getElementById('search').addEventListener('input', filterEvents);
+        document.getElementById('source-filter').addEventListener('change', filterEvents);
+
+        // Fetch events on page load
+        fetchEvents();
+    </script>
+</body>
+</html>
+

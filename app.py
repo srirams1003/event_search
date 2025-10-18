@@ -146,17 +146,44 @@ def parse_date_fallback(soup):
             (dict(property='event:start_time'), 'content'),
             (dict(name='event:start_time'), 'content'),
             (dict(property='og:event:start_time'), 'content'),
+            (dict(property='event:startDate'), 'content'),
+            (dict(name='startdate'), 'content'),
+            (dict(property='article:published_time'), 'content'),
         ]:
             m = soup.find('meta', **sel)
             if m and m.get(attr):
                 return m[attr]
         # ISO datetime anywhere in the HTML
-        m = re.search(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?", soup.get_text(" ", strip=True))
+        body_text = soup.get_text(" ", strip=True)
+        m = re.search(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?", body_text)
         if m:
             return m.group(0)
+        # Human-readable dates like "Oct 21, 2025 6:00 PM" or "October 21, 2025, 6:00 PM"
+        month_re = r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|January|February|March|April|June|July|August|September|October|November|December)"
+        hm = re.search(fr"{month_re}[^\n\r\t]{{0,20}}\d{{1,2}}[^\n\r\t]{{0,20}}\d{{4}}[^\n\r\t]{{0,20}}(?:\d{{1,2}}:\d{{2}}\s?(?:AM|PM|am|pm)?)?", body_text)
+        if hm:
+            return hm.group(0)
     except Exception:
         pass
     return ''
+
+def extract_meta_title(soup):
+    """Prefer og:title/twitter:title over H1 for better titles on external sites."""
+    try:
+        mt = soup.find('meta', property='og:title')
+        if mt and mt.get('content'):
+            return mt['content'].strip()
+        tt = soup.find('meta', attrs={'name': 'twitter:title'})
+        if tt and tt.get('content'):
+            return tt['content'].strip()
+        h1 = soup.find('h1')
+        if h1:
+            return h1.get_text(strip=True)
+        if soup.title:
+            return soup.title.get_text(strip=True)
+    except Exception:
+        pass
+    return 'Untitled Event'
 
 def within_next_two_weeks(date_str):
     if not date_str:
@@ -424,6 +451,12 @@ def fetch_luma_events():
                 'python','javascript','typescript','react','node','go','rust','java','swift','ios','android',
                 'meetup','tech','technology'
             ]
+            # Core tech tokens: require at least one for Luma specifically (to avoid generic social/entrepreneur events)
+            core_tech = [
+                'ai','artificial intelligence','machine learning','ml','data','llm','developer','engineering',
+                'software','coding','programming','hack','hackathon','web3','blockchain','crypto','cloud','kubernetes','docker','devops',
+                'python','javascript','typescript','react','node','go','rust','java','swift','ios','android'
+            ]
             deny_keywords = [
                 'pickleball','padel','tennis','basketball','baseball','football','soccer','bike','cycling',
                 'backgammon','party','festival','music','concert','yoga','comedy','dance','theater','theatre'
@@ -495,9 +528,12 @@ def fetch_luma_events():
                         # Luma: do not require explicit SF text; keep within next two weeks only if date known
                         if parsed.get('date') and not within_next_two_weeks(parsed['date']):
                             continue
+                        # Require core tech terms for Luma events (stricter)
+                        if not any(k in text_for_filter for k in core_tech):
+                            continue
                         events.append(parsed)
                     else:
-                        title = (dsoup.find('h1') or dsoup.title or {}).get_text(strip=True) if dsoup.find('h1') or dsoup.title else 'Untitled Event'
+                        title = extract_meta_title(dsoup)
                         # Drop obvious non-event pages
                         if any(k in title.lower() for k in deny_keywords) or title.strip().lower() in {"discover events","pricing"}:
                             continue
@@ -506,6 +542,10 @@ def fetch_luma_events():
                         if not date_guess:
                             continue
                         if date_guess and not within_next_two_weeks(date_guess):
+                            continue
+                        # Require core tech terms for Luma fallback
+                        low = title.lower()
+                        if not any(k in low for k in core_tech):
                             continue
                         events.append({
                             'title': title,
@@ -621,6 +661,9 @@ def fetch_cerebralvalley_events():
             # Visit detail pages and parse JSON-LD
             for link in links[:25]:
                 try:
+                    # Skip non-parsable auth walls
+                    if 'linkedin.com' in link:
+                        continue
                     hdrs = DEFAULT_HEADERS | {"Referer": url}
                     dresp = requests.get(link, headers=hdrs, timeout=10)
                     if dresp.status_code != 200:
@@ -634,13 +677,28 @@ def fetch_cerebralvalley_events():
                         # Prefer parsed date; fallback to DOM
                         if not parsed.get('date'):
                             parsed['date'] = parse_date_fallback(dsoup)
+                            if not parsed['date']:
+                                rhtml = render_page_with_playwright(link)
+                                if rhtml:
+                                    rsoup = BeautifulSoup(rhtml, 'html.parser')
+                                    rparsed = extract_event_from_jsonld(rsoup, link) or {}
+                                    parsed['date'] = rparsed.get('date') or parse_date_fallback(rsoup) or ''
+                                    if not parsed.get('title'):
+                                        parsed['title'] = rparsed.get('title') or extract_meta_title(rsoup)
                         # CV: do not require SF text; only enforce window if date known
                         if parsed.get('date') and not within_next_two_weeks(parsed['date']):
                             continue
                         events.append(parsed)
                     else:
-                        title = (dsoup.find('h1') or dsoup.title or {}).get_text(strip=True) if dsoup.find('h1') or dsoup.title else 'Untitled Event'
+                        title = extract_meta_title(dsoup)
                         date_guess = parse_date_fallback(dsoup)
+                        if not date_guess:
+                            rhtml = render_page_with_playwright(link)
+                            if rhtml:
+                                rsoup = BeautifulSoup(rhtml, 'html.parser')
+                                rparsed = extract_event_from_jsonld(rsoup, link) or {}
+                                title = rparsed.get('title') or extract_meta_title(rsoup) or title
+                                date_guess = rparsed.get('date') or parse_date_fallback(rsoup) or ''
                         if date_guess and not within_next_two_weeks(date_guess):
                             continue
                         events.append({
@@ -678,6 +736,8 @@ def fetch_cerebralvalley_events():
                     events = []
                     for link in links[:25]:
                         try:
+                            if 'linkedin.com' in link:
+                                continue
                             dresp = requests.get(link, headers=DEFAULT_HEADERS, timeout=10)
                             if dresp.status_code != 200:
                                 continue
@@ -689,12 +749,27 @@ def fetch_cerebralvalley_events():
                                 parsed['is_virtual'] = parsed.get('is_virtual', any(k in text for k in ['online','virtual','zoom','remote']))
                                 if not parsed.get('date'):
                                     parsed['date'] = parse_date_fallback(dsoup)
+                                    if not parsed['date']:
+                                        rhtml = render_page_with_playwright(link)
+                                        if rhtml:
+                                            rsoup = BeautifulSoup(rhtml, 'html.parser')
+                                            rparsed = extract_event_from_jsonld(rsoup, link) or {}
+                                            parsed['date'] = rparsed.get('date') or parse_date_fallback(rsoup) or ''
+                                            if not parsed.get('title'):
+                                                parsed['title'] = rparsed.get('title') or extract_meta_title(rsoup)
                                 if parsed.get('date') and not within_next_two_weeks(parsed['date']):
                                     continue
                                 events.append(parsed)
                             else:
-                                title = (dsoup.find('h1') or dsoup.title or {}).get_text(strip=True) if dsoup.find('h1') or dsoup.title else 'Untitled Event'
+                                title = extract_meta_title(dsoup)
                                 date_guess = parse_date_fallback(dsoup)
+                                if not date_guess:
+                                    rhtml = render_page_with_playwright(link)
+                                    if rhtml:
+                                        rsoup = BeautifulSoup(rhtml, 'html.parser')
+                                        rparsed = extract_event_from_jsonld(rsoup, link) or {}
+                                        title = rparsed.get('title') or extract_meta_title(rsoup) or title
+                                        date_guess = rparsed.get('date') or parse_date_fallback(rsoup) or ''
                                 if date_guess and not within_next_two_weeks(date_guess):
                                     continue
                                 events.append({
@@ -728,14 +803,23 @@ def fetch_cerebralvalley_events():
                 events = []
                 for link in links:
                     try:
+                        if 'linkedin.com' in link:
+                            continue
                         dresp = requests.get(link, headers=DEFAULT_HEADERS, timeout=10)
                         if dresp.status_code != 200:
                             continue
                         dsoup = BeautifulSoup(dresp.content, 'html.parser')
                         parsed = extract_event_from_jsonld(dsoup, link) or {}
-                        title = parsed.get('title') or (dsoup.find('h1') or dsoup.title or {}).get_text(strip=True) if dsoup.find('h1') or dsoup.title else 'Untitled Event'
+                        title = parsed.get('title') or extract_meta_title(dsoup)
                         desc = parsed.get('description', '')
                         datev = parsed.get('date') or parse_date_fallback(dsoup)
+                        if not datev:
+                            rhtml = render_page_with_playwright(link)
+                            if rhtml:
+                                rsoup = BeautifulSoup(rhtml, 'html.parser')
+                                rparsed = extract_event_from_jsonld(rsoup, link) or {}
+                                title = title or rparsed.get('title') or extract_meta_title(rsoup)
+                                datev = rparsed.get('date') or parse_date_fallback(rsoup) or ''
                         if datev and not within_next_two_weeks(datev):
                             continue
                         events.append({

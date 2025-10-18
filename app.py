@@ -76,6 +76,22 @@ def extract_event_from_jsonld(soup, base_url):
         pass
     return None
 
+def render_page_with_playwright(url, wait_until='networkidle', timeout=10000):
+    """Render a JS-heavy page and return HTML. Returns None if Playwright is unavailable or fails."""
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(user_agent=DEFAULT_HEADERS.get('User-Agent'))
+            page = context.new_page()
+            page.goto(url, wait_until=wait_until, timeout=timeout)
+            html = page.content()
+            browser.close()
+            return html
+    except Exception as e:
+        print(f"Playwright render failed for {url}: {e}")
+        return None
+
 def parse_date_fallback(soup):
     """Try multiple strategies to extract a start date/time from an event page."""
     try:
@@ -330,15 +346,34 @@ def fetch_luma_events():
         
         start_date, end_date = get_date_range()
         
-        # Luma tech events page
-        url = "https://luma.com/tech"
+        # Luma discovery: try multiple pages
+        luma_pages = [
+            "https://luma.com/tech",
+            "https://luma.com/discover",
+            "https://lu.ma/tech",
+            "https://lu.ma/sf",
+        ]
         headers = DEFAULT_HEADERS
-        
-        response = requests.get(url, headers=headers, timeout=10)
-        
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.content, 'html.parser')
-            events = []
+        events = []
+        url = None
+        for page in luma_pages:
+            url = page
+            response = requests.get(url, headers=headers, timeout=10)
+            soup = None
+            if response.status_code == 200:
+                # Try headless render first
+                rendered = render_page_with_playwright(url)
+                if rendered:
+                    soup = BeautifulSoup(rendered, 'html.parser')
+                else:
+                    soup = BeautifulSoup(response.content, 'html.parser')
+            else:
+                # Even if static fetch failed, try render (some sites require JS)
+                rendered = render_page_with_playwright(url)
+                if rendered:
+                    soup = BeautifulSoup(rendered, 'html.parser')
+                else:
+                    continue
 
             # Simple tech-only filtering using allowlist/denylist keywords
             allow_keywords = [
@@ -380,7 +415,7 @@ def fetch_luma_events():
                     links.append(urljoin('https://luma.com', m))
 
             links = list(dict.fromkeys(links))
-            print(f"Luma: candidate links {len(links)}")
+            print(f"Luma: candidate links {len(links)} from {url}")
 
             # Visit detail pages and parse JSON-LD
             for link in links[:25]:
@@ -424,11 +459,9 @@ def fetch_luma_events():
                 except Exception:
                     continue
             
-            print(f"Luma: Found {len(events)} events via web scraping")
-            luma_events = events
-        else:
-            print(f"Luma scraping error: {response.status_code}")
-            luma_events = []
+            if events:
+                break
+        luma_events = events
         
         # If no events yet, try sitemap fallback
         if not luma_events:
@@ -563,15 +596,108 @@ def fetch_cerebralvalley_events():
                     continue
 
             print(f"Cerebral Valley: Found {len(events)} events via web scraping")
-            return events
+            cv_events = events
         else:
             print(f"Cerebral Valley scraping error: {response.status_code}")
-            return []
+            cv_events = []
+        
+        # If still empty, try rendering the listing page via Playwright
+        if not cv_events:
+            rendered = render_page_with_playwright(url)
+            if rendered:
+                try:
+                    soup = BeautifulSoup(rendered, 'html.parser')
+                    links = []
+                    for a in soup.find_all('a', href=True):
+                        href = a['href']
+                        if '/events/' in href:
+                            links.append(urljoin('https://cerebralvalley.ai', href))
+                    links = list(dict.fromkeys(links))
+                    print(f"Cerebral Valley (rendered): candidate links {len(links)}")
+                    events = []
+                    for link in links[:25]:
+                        try:
+                            dresp = requests.get(link, headers=DEFAULT_HEADERS, timeout=10)
+                            if dresp.status_code != 200:
+                                continue
+                            dsoup = BeautifulSoup(dresp.content, 'html.parser')
+                            parsed = extract_event_from_jsonld(dsoup, link)
+                            if parsed:
+                                parsed['source'] = 'CerebralValley'
+                                text = (parsed['title'] + ' ' + parsed.get('description','')).lower()
+                                parsed['is_virtual'] = parsed.get('is_virtual', any(k in text for k in ['online','virtual','zoom','remote']))
+                                if not parsed.get('date'):
+                                    parsed['date'] = parse_date_fallback(dsoup)
+                                if parsed.get('date') and not within_next_two_weeks(parsed['date']):
+                                    continue
+                                events.append(parsed)
+                            else:
+                                title = (dsoup.find('h1') or dsoup.title or {}).get_text(strip=True) if dsoup.find('h1') or dsoup.title else 'Untitled Event'
+                                date_guess = parse_date_fallback(dsoup)
+                                if date_guess and not within_next_two_weeks(date_guess):
+                                    continue
+                                events.append({
+                                    'title': title,
+                                    'description': 'AI/Tech event in San Francisco',
+                                    'url': link,
+                                    'date': date_guess,
+                                    'venue': 'San Francisco, CA',
+                                    'is_virtual': any(k in title.lower() for k in ['online','virtual','zoom','remote']),
+                                    'source': 'CerebralValley'
+                                })
+                            time.sleep(0.2)
+                        except Exception:
+                            continue
+                    if events:
+                        cv_events = events
+                except Exception:
+                    pass
+
+        # If still empty, try sitemap fallback
+        if not cv_events:
+            try:
+                sm_url = "https://cerebralvalley.ai/sitemap.xml"
+                links = []
+                sresp = requests.get(sm_url, headers=DEFAULT_HEADERS, timeout=10)
+                if sresp.status_code == 200:
+                    for m in re.findall(r"https?://cerebralvalley\.ai/events/[^<\s]+", sresp.text):
+                        links.append(m)
+                links = list(dict.fromkeys(links))[:30]
+                print(f"Cerebral Valley sitemap: candidate links {len(links)}")
+                events = []
+                for link in links:
+                    try:
+                        dresp = requests.get(link, headers=DEFAULT_HEADERS, timeout=10)
+                        if dresp.status_code != 200:
+                            continue
+                        dsoup = BeautifulSoup(dresp.content, 'html.parser')
+                        parsed = extract_event_from_jsonld(dsoup, link) or {}
+                        title = parsed.get('title') or (dsoup.find('h1') or dsoup.title or {}).get_text(strip=True) if dsoup.find('h1') or dsoup.title else 'Untitled Event'
+                        desc = parsed.get('description', '')
+                        datev = parsed.get('date') or parse_date_fallback(dsoup)
+                        if datev and not within_next_two_weeks(datev):
+                            continue
+                        events.append({
+                            'title': title,
+                            'description': desc or 'AI/Tech event in San Francisco',
+                            'url': link,
+                            'date': datev or '',
+                            'venue': parsed.get('venue', 'San Francisco, CA'),
+                            'is_virtual': parsed.get('is_virtual', any(k in (title+desc).lower() for k in ['online','virtual','zoom','remote'])),
+                            'source': 'CerebralValley'
+                        })
+                        time.sleep(0.2)
+                    except Exception:
+                        continue
+                if events:
+                    cv_events = events
+            except Exception:
+                pass
+
+        return cv_events
     except Exception as e:
         print(f"Error fetching Cerebral Valley events: {e}")
         return []
-
-
 
 def is_duplicate(event1, event2, threshold=0.75):
     """

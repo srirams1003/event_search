@@ -8,3 +8,5 @@ transformers
 beautifulsoup4
 lxml
 numpy<2
+python-dateutil
+playwright

@@ -466,6 +466,10 @@ def fetch_luma_events():
                 for a in soup.find_all('a', href=True):
                     href = a['href']
                     if re.fullmatch(r"/[a-z0-9\-]+", href):
+                        # Exclude known non-event slugs
+                        banned = {"/discover","/pricing","/about","/login","/signin","/signup","/create","/home"}
+                        if href.lower() in banned:
+                            continue
                         links.append(urljoin('https://lu.ma', href))
 
             links = list(dict.fromkeys(links))
@@ -494,10 +498,13 @@ def fetch_luma_events():
                         events.append(parsed)
                     else:
                         title = (dsoup.find('h1') or dsoup.title or {}).get_text(strip=True) if dsoup.find('h1') or dsoup.title else 'Untitled Event'
-                        if any(k in title.lower() for k in deny_keywords):
+                        # Drop obvious non-event pages
+                        if any(k in title.lower() for k in deny_keywords) or title.strip().lower() in {"discover events","pricing"}:
                             continue
                         date_guess = parse_date_fallback(dsoup)
-                        # Luma: only enforce window if we have a date
+                        # For slug-based Luma pages, require a detectable date
+                        if not date_guess:
+                            continue
                         if date_guess and not within_next_two_weeks(date_guess):
                             continue
                         events.append({

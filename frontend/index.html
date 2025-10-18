@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Event Search</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#3B82F6',
+                        secondary: '#1E40AF',
+                        accent: '#F59E0B'
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <!-- Header -->
+    <header class="bg-white shadow-sm border-b">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center py-6">
+                <div class="flex items-center">
+                    <h1 class="text-2xl font-bold text-gray-900">EventSearch</h1>
+                </div>
+                <nav class="hidden md:flex space-x-8">
+                    <a href="#" class="text-gray-500 hover:text-gray-900">Discover</a>
+                    <a href="#" class="text-gray-500 hover:text-gray-900">Categories</a>
+                    <a href="#" class="text-gray-500 hover:text-gray-900">About</a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <!-- Hero Section -->
+    <section class="bg-gradient-to-r from-primary to-secondary text-white py-20">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+            <h2 class="text-4xl font-bold mb-4">Find Amazing Events Near You</h2>
+            <p class="text-xl mb-8 opacity-90">Discover concerts, workshops, meetups, and more</p>
+            
+            <!-- Search Bar -->
+            <div class="max-w-2xl mx-auto">
+                <div class="flex flex-col md:flex-row gap-4">
+                    <div class="flex-1">
+                        <input 
+                            type="text" 
+                            placeholder="What are you looking for?"
+                            class="w-full px-4 py-3 rounded-lg text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-accent"
+                        >
+                    </div>
+                    <div class="flex-1">
+                        <input 
+                            type="text" 
+                            placeholder="Location"
+                            class="w-full px-4 py-3 rounded-lg text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-accent"
+                        >
+                    </div>
+                    <button class="bg-accent hover:bg-yellow-600 text-white px-8 py-3 rounded-lg font-semibold transition-colors">
+                        Search Events
+                    </button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Filters Section -->
+    <section class="bg-white py-8 border-b">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex flex-wrap gap-4 items-center">
+                <span class="text-gray-700 font-medium">Filter by:</span>
+                <select class="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary">
+                    <option>All Categories</option>
+                    <option>Music</option>
+                    <option>Technology</option>
+                    <option>Sports</option>
+                    <option>Arts</option>
+                    <option>Business</option>
+                </select>
+                <select class="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary">
+                    <option>Any Date</option>
+                    <option>Today</option>
+                    <option>This Week</option>
+                    <option>This Month</option>
+                </select>
+                <select class="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary">
+                    <option>Any Price</option>
+                    <option>Free</option>
+                    <option>Under $25</option>
+                    <option>Under $50</option>
+                    <option>Under $100</option>
+                </select>
+            </div>
+        </div>
+    </section>
+
+    <!-- Events Grid -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+        <div class="mb-8">
+            <h3 class="text-2xl font-bold text-gray-900 mb-2">Popular Events</h3>
+            <p class="text-gray-600">Discover trending events in your area</p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+            <!-- Event Card 1 -->
+            <div class="bg-white rounded-lg shadow-md overflow-hidden hover:shadow-lg transition-shadow">
+                <div class="h-48 bg-gradient-to-br from-primary to-secondary"></div>
+                <div class="p-6">
+                    <div class="flex items-center mb-2">
+                        <span class="bg-accent text-white px-2 py-1 rounded text-sm font-medium">Music</span>
+                        <span class="ml-2 text-gray-500 text-sm">Dec 15, 2024</span>
+                    </div>
+                    <h4 class="text-xl font-semibold text-gray-900 mb-2">Summer Music Festival</h4>
+                    <p class="text-gray-600 mb-4">Join us for an amazing day of live music featuring top artists from around the world.</p>
+                    <div class="flex items-center justify-between">
+                        <span class="text-gray-500">📍 Central Park, NYC</span>
+                        <span class="text-primary font-semibold">$45</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Event Card 2 -->
+            <div class="bg-white rounded-lg shadow-md overflow-hidden hover:shadow-lg transition-shadow">
+                <div class="h-48 bg-gradient-to-br from-green-400 to-blue-500"></div>
+                <div class="p-6">
+                    <div class="flex items-center mb-2">
+                        <span class="bg-green-500 text-white px-2 py-1 rounded text-sm font-medium">Technology</span>
+                        <span class="ml-2 text-gray-500 text-sm">Dec 20, 2024</span>
+                    </div>
+                    <h4 class="text-xl font-semibold text-gray-900 mb-2">Tech Conference 2024</h4>
+                    <p class="text-gray-600 mb-4">Learn about the latest trends in technology and network with industry professionals.</p>
+                    <div class="flex items-center justify-between">
+                        <span class="text-gray-500">📍 Convention Center</span>
+                        <span class="text-primary font-semibold">$120</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Event Card 3 -->
+            <div class="bg-white rounded-lg shadow-md overflow-hidden hover:shadow-lg transition-shadow">
+                <div class="h-48 bg-gradient-to-br from-purple-400 to-pink-500"></div>
+                <div class="p-6">
+                    <div class="flex items-center mb-2">
+                        <span class="bg-purple-500 text-white px-2 py-1 rounded text-sm font-medium">Arts</span>
+                        <span class="ml-2 text-gray-500 text-sm">Dec 22, 2024</span>
+                    </div>
+                    <h4 class="text-xl font-semibold text-gray-900 mb-2">Art Exhibition Opening</h4>
+                    <p class="text-gray-600 mb-4">Experience contemporary art from emerging and established artists in our community.</p>
+                    <div class="flex items-center justify-between">
+                        <span class="text-gray-500">📍 Modern Art Gallery</span>
+                        <span class="text-green-600 font-semibold">Free</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Load More Button -->
+        <div class="text-center mt-12">
+            <button class="bg-primary hover:bg-secondary text-white px-8 py-3 rounded-lg font-semibold transition-colors">
+                Load More Events
+            </button>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-gray-900 text-white py-12">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
+                <div>
+                    <h5 class="text-lg font-semibold mb-4">EventSearch</h5>
+                    <p class="text-gray-400">Discover and join amazing events happening around you.</p>
+                </div>
+                <div>
+                    <h6 class="font-semibold mb-4">Categories</h6>
+                    <ul class="space-y-2 text-gray-400">
+                        <li><a href="#" class="hover:text-white">Music</a></li>
+                        <li><a href="#" class="hover:text-white">Technology</a></li>
+                        <li><a href="#" class="hover:text-white">Sports</a></li>
+                        <li><a href="#" class="hover:text-white">Arts</a></li>
+                    </ul>
+                </div>
+                <div>
+                    <h6 class="font-semibold mb-4">Support</h6>
+                    <ul class="space-y-2 text-gray-400">
+                        <li><a href="#" class="hover:text-white">Help Center</a></li>
+                        <li><a href="#" class="hover:text-white">Contact Us</a></li>
+                        <li><a href="#" class="hover:text-white">Privacy Policy</a></li>
+                        <li><a href="#" class="hover:text-white">Terms of Service</a></li>
+                    </ul>
+                </div>
+                <div>
+                    <h6 class="font-semibold mb-4">Connect</h6>
+                    <div class="flex space-x-4">
+                        <a href="#" class="text-gray-400 hover:text-white">Twitter</a>
+                        <a href="#" class="text-gray-400 hover:text-white">Facebook</a>
+                        <a href="#" class="text-gray-400 hover:text-white">Instagram</a>
+                    </div>
+                </div>
+            </div>
+            <div class="border-t border-gray-800 mt-8 pt-8 text-center text-gray-400">
+                <p>&copy; 2024 EventSearch. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>

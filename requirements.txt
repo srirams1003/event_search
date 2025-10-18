@@ -1,0 +1,10 @@
+Flask==3.0.0
+flask-cors==4.0.0
+requests==2.31.0
+sentence-transformers
+python-dotenv==1.0.0
+torch
+transformers
+beautifulsoup4
+lxml
+

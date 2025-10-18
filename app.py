@@ -92,6 +92,47 @@ def render_page_with_playwright(url, wait_until='networkidle', timeout=10000):
         print(f"Playwright render failed for {url}: {e}")
         return None
 
+def get_luma_links_via_playwright(url):
+    """Use Playwright to render and extract candidate event links on Luma/Lu.ma pages, including data-href links."""
+    try:
+        from urllib.parse import urljoin
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(user_agent=DEFAULT_HEADERS.get('User-Agent'))
+            page = context.new_page()
+            page.goto(url, wait_until='domcontentloaded', timeout=12000)
+            try:
+                page.wait_for_selector('a[href*="/event/"], a[href*="/e/"], [data-href*="/event/"], [data-url*="/event/"]', timeout=8000)
+            except Exception:
+                pass
+            raw_links = page.eval_on_selector_all(
+                'a[href], [data-href], [data-url], [data-event-url], [data-testid]',
+                'els => els.map(e => e.getAttribute("href") || e.getAttribute("data-href") || e.getAttribute("data-url") || e.getAttribute("data-event-url") || e.getAttribute("data-testid"))'
+            ) or []
+            links = []
+            for href in raw_links:
+                if not href:
+                    continue
+                absu = urljoin(url, href)
+                if ('luma.com' in absu or 'lu.ma' in absu):
+                    if any(seg in absu for seg in ['/event/', '/e/']):
+                        links.append(absu)
+            # Regex over rendered HTML as a last resort
+            try:
+                html = page.content()
+                import re as _re
+                for m in _re.findall(r"https?://(?:lu\.ma|luma\.com)/(?:event|e)/[^\"'\s<>]+", html):
+                    links.append(m)
+            except Exception:
+                pass
+            links = list(dict.fromkeys(links))
+            browser.close()
+            return links
+    except Exception as e:
+        print(f"Playwright DOM eval failed for {url}: {e}")
+        return []
+
 def parse_date_fallback(soup):
     """Try multiple strategies to extract a start date/time from an event page."""
     try:
@@ -413,6 +454,19 @@ def fetch_luma_events():
                     links.append(m)
                 for m in re.findall(r"/+(?:event|e)/[^\"'\s<>]+", html):
                     links.append(urljoin('https://luma.com', m))
+
+            # Playwright DOM-eval fallback to capture data-href/data-url links
+            if not links:
+                pl_links = get_luma_links_via_playwright(url)
+                if pl_links:
+                    links.extend(pl_links)
+
+            # Fallback: lu.ma short slugs like "/abc-def"
+            if not links:
+                for a in soup.find_all('a', href=True):
+                    href = a['href']
+                    if re.fullmatch(r"/[a-z0-9\-]+", href):
+                        links.append(urljoin('https://lu.ma', href))
 
             links = list(dict.fromkeys(links))
             print(f"Luma: candidate links {len(links)} from {url}")
